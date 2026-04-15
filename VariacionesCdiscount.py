@@ -2,70 +2,82 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-# Configuración de la página
-st.set_page_config(page_title="Generador de Variaciones Cdiscount", layout="wide")
+st.set_page_config(page_title="Cdiscount Variation Generator", layout="wide")
 
-st.title("📦 Procesador de Variaciones: Cdiscount & Amazon")
-st.write("Sube los dos ficheros Excel para generar el formato final.")
+st.title("🚀 Generador de Variaciones Cdiscount")
+st.markdown("""
+Esta herramienta cruza el catálogo de Cdiscount con las variaciones de Amazon mediante el **EAN**.
+""")
 
-# 1. Carga de archivos
+# Carga de archivos
 col1, col2 = st.columns(2)
-
 with col1:
-    file_cdiscount = st.file_uploader("Fichero 1: Catálogo Cdiscount (Excel)", type=["xlsx"])
+    file_cat = st.file_uploader("Subir Catálogo Cdiscount (SKUs Pendientes)", type=["csv", "xlsx"])
 with col2:
-    file_amazon = st.file_uploader("Fichero 2: Variaciones Amazon (Excel)", type=["xlsx"])
+    file_var = st.file_uploader("Subir Variaciones Amazon (Fichero VariacionesCdiscount)", type=["csv", "xlsx"])
 
-if file_cdiscount and file_amazon:
+if file_cat and file_var:
     try:
-        # Leer los archivos
-        # Asumimos que no tienen encabezados extraños y empiezan en la fila 0
-        df_cdiscount = pd.read_excel(file_cdiscount)
-        df_amazon = pd.read_excel(file_amazon)
+        # Carga de datos manejando CSV o Excel
+        def load_data(file):
+            if file.name.endswith('.csv'):
+                return pd.read_csv(file)
+            return pd.read_excel(file)
 
-        st.success("Archivos cargados correctamente.")
+        df_catalogo = load_data(file_cat)
+        df_variaciones = load_data(file_var)
 
-        # Lógica de procesamiento
-        # Nota: Las columnas en Pandas empiezan en 0 (A=0, B=1, C=2, etc.)
-        # Extraemos las columnas necesarias por índice para evitar errores de nombres
-        
-        # Fichero 1: B (EAN) es índice 1, C (SKU) es índice 2
-        df_cd_clean = df_cdiscount.iloc[:, [1, 2]].copy()
-        df_cd_clean.columns = ['EAN', 'Sku']
+        # Limpieza de nombres de columnas (quitar espacios en blanco)
+        df_catalogo.columns = df_catalogo.columns.str.strip()
+        df_variaciones.columns = df_variaciones.columns.str.strip()
 
-        # Fichero 2: B (EAN) es índice 1, C (Categoría) es índice 2, F (Atributos) es índice 5
-        df_am_clean = df_amazon.iloc[:, [1, 2, 5]].copy()
-        df_am_clean.columns = ['EAN', 'Catégorie', 'Attribut 1']
+        # Verificamos que existan las columnas clave
+        if 'EAN' in df_catalogo.columns and 'EAN' in df_variaciones.columns:
+            
+            # 1. Seleccionamos solo lo necesario de cada tabla
+            # Del catálogo nos interesa el EAN y el SKU
+            df_cat_min = df_catalogo[['EAN', 'SKU']].copy()
+            
+            # De variaciones nos interesa EAN, Atributos y Subcategoría
+            # Usamos los nombres exactos de tus archivos
+            df_var_min = df_variaciones[['EAN', 'Categorías: Subcategoría', 'Atributos de variación']].copy()
 
-        # Cruzar los datos (Inner Join por EAN)
-        df_final = pd.merge(df_cd_clean, df_am_clean, on='EAN', how='inner')
+            # 2. Realizamos el cruce (Merge)
+            # Aseguramos que el EAN sea tratado como string para evitar errores de formato
+            df_cat_min['EAN'] = df_cat_min['EAN'].astype(str).str.strip()
+            df_var_min['EAN'] = df_var_min['EAN'].astype(str).str.strip()
 
-        # Añadir columna 'Nom du GDV' (puedes ajustarla según necesites)
-        # Aquí la creamos vacía o basada en la categoría
-        df_final['Nom du GDV'] = df_final['Catégorie'] 
+            df_merged = pd.merge(df_cat_min, df_var_min, on='EAN', how='inner')
 
-        # Reordenar columnas según tu estructura
-        resultado = df_final[['Nom du GDV', 'Sku', 'Catégorie', 'Attribut 1']]
+            # 3. Construimos el DataFrame final con la estructura solicitada
+            df_final = pd.DataFrame()
+            df_final['Nom du GDV'] = df_merged['Categorías: Subcategoría'] # O el nombre que prefieras
+            df_final['Sku'] = df_merged['SKU']
+            df_final['Catégorie'] = df_merged['Categorías: Subcategoría']
+            df_final['Attribut 1'] = df_merged['Atributos de variación']
 
-        st.subheader("Vista previa del resultado:")
-        st.dataframe(resultado.head())
+            # Eliminar duplicados si existieran
+            df_final = df_final.drop_duplicates()
 
-        # 3. Exportar a Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            resultado.to_excel(writer, index=False, sheet_name='Variaciones')
-        
-        processed_data = output.getvalue()
+            st.success(f"¡Cruce finalizado! Se han generado {len(df_final)} filas.")
+            st.dataframe(df_final.head(10))
 
-        st.download_button(
-            label="📥 Descargar Excel Final",
-            data=processed_data,
-            file_name="variaciones_final.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            # 4. Botón de descarga
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='Variaciones')
+            
+            st.download_button(
+                label="📥 Descargar Fichero Final Excel",
+                data=output.getvalue(),
+                file_name="Cdiscount_Variaciones_Final.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.error("No se encontró la columna 'EAN' en uno de los archivos. Revisa los encabezados.")
 
     except Exception as e:
-        st.error(f"Error al procesar los archivos: {e}")
-        st.info("Asegúrate de que las columnas B, C, E y F contienen los datos esperados.")
+        st.error(f"Ocurrió un error al procesar: {e}")
+
 else:
-    st.info("Por favor, sube ambos archivos para comenzar.")
+    st.info("Esperando a que subas ambos archivos...")
